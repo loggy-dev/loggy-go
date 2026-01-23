@@ -100,6 +100,56 @@ defer logger.Destroy()
 | `FlushInterval` | time.Duration | `5s`                                 | Duration between auto-flushes      |
 | `PublicKey`     | string        | -                                    | RSA public key for encryption      |
 
+### Auto-Capture (Smart Defaults)
+
+Automatically capture all `fmt.Println()` and stdout/stderr output without changing your existing code:
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/loggy-dev/loggy-go"
+)
+
+func main() {
+    logger := loggy.New(loggy.Config{
+        Identifier: "my-app",
+        Remote: &loggy.RemoteConfig{
+            Token: "your-project-token",
+        },
+        Capture: &loggy.CaptureConfig{
+            Stdout: true,  // Capture all stdout (fmt.Println, etc.)
+            Stderr: true,  // Capture all stderr as errors
+        },
+    })
+    defer logger.Destroy()
+
+    // Now all fmt.Println calls are automatically sent to Loggy!
+    fmt.Println("This will appear in your Loggy dashboard")
+
+    // You can still use logger methods directly for more control
+    logger.Info("Direct log with metadata", map[string]interface{}{
+        "userId": 123,
+    })
+
+    // Restore original stdout/stderr if needed
+    logger.RestoreStdout()
+    logger.RestoreStderr()
+
+    // Re-enable capture
+    logger.EnableStdoutCapture()
+}
+```
+
+#### Capture Configuration
+
+| Option   | Type | Default | Description                              |
+| :------- | :--- | :------ | :--------------------------------------- |
+| `Stdout` | bool | `false` | Capture stdout (fmt.Println, etc.)       |
+| `Stderr` | bool | `false` | Capture stderr as error logs             |
+| `Panics` | bool | `false` | Capture panic() calls (coming soon)      |
+
 ## Performance Metrics (Pro/Team)
 
 Track request-per-minute (RPM) and throughput metrics:

@@ -42,6 +42,16 @@ type RemoteConfig struct {
 	PublicKey     string // For end-to-end encryption (optional)
 }
 
+// CaptureConfig configures auto-capture of stdout/stderr
+type CaptureConfig struct {
+	// Stdout captures os.Stdout writes and sends them as logs
+	Stdout bool
+	// Stderr captures os.Stderr writes and sends them as error logs
+	Stderr bool
+	// Panics captures panic() calls and sends them as error logs before re-panicking
+	Panics bool
+}
+
 // Config configures the Loggy logger
 type Config struct {
 	Identifier string
@@ -49,6 +59,8 @@ type Config struct {
 	Compact    bool
 	Timestamp  bool
 	Remote     *RemoteConfig
+	// Capture configures auto-capture of stdout/stderr/panics
+	Capture *CaptureConfig
 }
 
 // Logger is the main Loggy logger instance
@@ -68,6 +80,16 @@ type Logger struct {
 	idColor    *color.Color
 	dateColor  *color.Color
 	timeColor  *color.Color
+
+	// Capture state
+	originalStdout *os.File
+	originalStderr *os.File
+	stdoutReader   *os.File
+	stdoutWriter   *os.File
+	stderrReader   *os.File
+	stderrWriter   *os.File
+	captureWg      sync.WaitGroup
+	captureDone    chan struct{}
 }
 
 // New creates a new Loggy logger instance
@@ -89,6 +111,7 @@ func New(config Config) *Logger {
 		config:      config,
 		logBuffer:   make([]LogEntry, 0),
 		stopChan:    make(chan struct{}),
+		captureDone: make(chan struct{}),
 		debugColor:  color.New(color.FgHiCyan),
 		infoColor:   color.New(color.FgHiCyan),
 		warnColor:   color.New(color.FgYellow),
@@ -103,6 +126,16 @@ func New(config Config) *Logger {
 		l.flushTicker = time.NewTicker(config.Remote.FlushInterval)
 		l.wg.Add(1)
 		go l.flushLoop()
+	}
+
+	// Set up capture if configured
+	if config.Capture != nil {
+		if config.Capture.Stdout {
+			l.setupStdoutCapture()
+		}
+		if config.Capture.Stderr {
+			l.setupStderrCapture()
+		}
 	}
 
 	return l
@@ -365,6 +398,131 @@ func (l *Logger) Flush() error {
 	return nil
 }
 
+// setupStdoutCapture sets up stdout capture using a pipe
+func (l *Logger) setupStdoutCapture() {
+	if l.originalStdout != nil {
+		return // Already capturing
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		return
+	}
+
+	l.originalStdout = os.Stdout
+	l.stdoutReader = r
+	l.stdoutWriter = w
+	os.Stdout = w
+
+	l.captureWg.Add(1)
+	go l.captureOutput(r, l.originalStdout, LevelInfo)
+}
+
+// setupStderrCapture sets up stderr capture using a pipe
+func (l *Logger) setupStderrCapture() {
+	if l.originalStderr != nil {
+		return // Already capturing
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		return
+	}
+
+	l.originalStderr = os.Stderr
+	l.stderrReader = r
+	l.stderrWriter = w
+	os.Stderr = w
+
+	l.captureWg.Add(1)
+	go l.captureOutput(r, l.originalStderr, LevelError)
+}
+
+// captureOutput reads from the pipe and logs each line
+func (l *Logger) captureOutput(reader *os.File, original *os.File, level LogLevel) {
+	defer l.captureWg.Done()
+
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-l.captureDone:
+			return
+		default:
+			n, err := reader.Read(buf)
+			if err != nil {
+				return
+			}
+			if n > 0 {
+				// Write to original output
+				original.Write(buf[:n])
+
+				// Parse and log each line
+				text := string(buf[:n])
+				lines := splitLines(text)
+				for _, line := range lines {
+					if line != "" {
+						l.queueLog(LogEntry{
+							Level:     level,
+							Message:   line,
+							Timestamp: time.Now().UTC().Format(time.RFC3339),
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+// splitLines splits text into lines, handling both \n and \r\n
+func splitLines(text string) []string {
+	var lines []string
+	var current string
+	for _, ch := range text {
+		if ch == '\n' {
+			if current != "" {
+				lines = append(lines, current)
+			}
+			current = ""
+		} else if ch != '\r' {
+			current += string(ch)
+		}
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+// RestoreStdout restores the original stdout
+func (l *Logger) RestoreStdout() {
+	if l.originalStdout == nil {
+		return
+	}
+	l.stdoutWriter.Close()
+	os.Stdout = l.originalStdout
+	l.originalStdout = nil
+}
+
+// RestoreStderr restores the original stderr
+func (l *Logger) RestoreStderr() {
+	if l.originalStderr == nil {
+		return
+	}
+	l.stderrWriter.Close()
+	os.Stderr = l.originalStderr
+	l.originalStderr = nil
+}
+
+// EnableStdoutCapture enables stdout capture after initialization
+func (l *Logger) EnableStdoutCapture() {
+	l.setupStdoutCapture()
+}
+
+// EnableStderrCapture enables stderr capture after initialization
+func (l *Logger) EnableStderrCapture() {
+	l.setupStderrCapture()
+}
+
 // Destroy stops the logger and flushes remaining logs
 func (l *Logger) Destroy() error {
 	if l.flushTicker != nil {
@@ -372,5 +530,12 @@ func (l *Logger) Destroy() error {
 		close(l.stopChan)
 		l.wg.Wait()
 	}
+
+	// Stop capture goroutines
+	close(l.captureDone)
+	l.RestoreStdout()
+	l.RestoreStderr()
+	l.captureWg.Wait()
+
 	return l.Flush()
 }
