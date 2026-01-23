@@ -61,26 +61,15 @@ Before publishing any SDK:
 2. [ ] Run all tests locally
 3. [ ] Update README if API changed
 4. [ ] Commit all changes
-5. [ ] Create git tag (for Go) or update package.json version (for npm)
+5. [ ] Create git tag
 6. [ ] Publish to registry
 7. [ ] Verify installation works:
-   - npm: `npm install @loggydev/loggy-node@<version>`
    - Go: `go get github.com/loggy-dev/loggy-go@<version>`
 8. [ ] Update documentation if needed
 
 ---
 
 ## Troubleshooting
-
-### npm: "You must be logged in to publish packages"
-
-```bash
-npm login
-```
-
-### npm: "You do not have permission to publish"
-
-Ensure you're a member of the `@loggydev` organization on npm.
 
 ### Go: "module not found"
 

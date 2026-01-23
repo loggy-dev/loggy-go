@@ -47,8 +47,8 @@ if [[ -n $(git status --porcelain loggy-go/) ]]; then
 fi
 
 # Create and push tag for the loggy-go module
-# Go modules in subdirectories use the format: loggy-go/v0.1.0
-TAG="loggy-go/$VERSION"
+# Since this is the root of its own repo, use plain version tags
+TAG="$VERSION"
 
 echo "Creating tag $TAG..."
 git tag "$TAG"
